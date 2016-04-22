@@ -1,0 +1,304 @@
+/*====sqlite3数据编程====*/
+SQLite是一款轻型的关系型数据库管理系统。它的设计目标主要是嵌入式设备，而且目前已经在很多嵌入式产品中使用了它，比如主流的Android系统和IOS系统都采用sqlite进行数据管理。sqlite占用资源非常的低，在嵌入式设备中，可能只需要几百K的内存就够了。
+    
+/*====sqlite3数据库编程基本步骤====*/
+1.建立数据库连接
+2.操作数据库（增删改查）
+    a.不使用sqlite3_stmt
+    b.使用sqlite3_stmt
+    a方法编程简单，但是所有的数据都要写在sql语句中，不利于特殊字符和二进制数据的处理，b方法编程相对复杂，但可以处理任何数据
+3.关闭连接
+
+/*====sqlite3数据库C语言API简介====*/
+/* sqlite3 表示数据库连接 */
+typedef struct sqlite3 sqlite3;
+
+/**
+ *  和数据库建立连接
+ *
+ *  @param filename
+ *  数据库文件的名字，如果文件存在则打开，反之则创建文件并且打开
+ *  @param ppDb     数据库连接
+ *
+ *  @return 如果成功返回SQLITE_OK
+ */
+int sqlite3_open(const char *filename, sqlite3 **ppDb);
+
+/**
+ *  关闭数据库连接
+ *
+ *  @param sqlite3 数据库的连接
+ *
+ *  @return 如果成功返回SQLITE_OK
+ */
+int sqlite3_close(sqlite3 *);
+
+例1：
+sqlite3 *db;
+ret = sqlite3_open("./test.sqlite", &db);
+if (ret != SQLITE_OK) {
+    fprintf(stderr, "sqlite3_open error\n");
+    exit(1);
+}
+//---增删改查
+sqlite3_close(db);
+
+注意：在编译程序的时候需要指定连接库-lsqlite3    
+gcc sqlite_test.c -o sqlite_test -lsqlite3
+
+/**
+ *  执行sql语句
+ *
+ *  @param db       数据库连接
+ *  @param callback 如果执行的是查询语句，则通过callback回调函获取查询结果
+ *  @param data     传给回调函数callback的参数
+ *  @param errmsg   出错信息
+ *
+ *  @return 如果成功返回SQLITE_OK
+ */
+int sqlite3_exec(sqlite3 *db, const char *sql sqlite3_callback callback, void *data, char **errmsg);
+
+例2:
+char *sql = "create table if not exists userTable(id integer not null primary key autoincrement, name text not null, passwd text not null)";
+char *err;
+ret = sqlite3_exec(db, sql, NULL, NULL, &err);
+if (ret != SQLITE_OK) {
+    fprintf(stderr, "create table error resion:%s\n", err);
+    sqlite3_close(db);
+    exit(1);
+}
+char *insert_sql = "insert into userTable(name, passwd) values('zhangsan', '112233')";
+ret = sqlite3_exec(db, insert_sql, NULL, NULL, &err);
+if (ret != SQLITE_OK) {
+    fprintf(stderr, "insert error resion:%s\n", err);
+    sqlite3_close(db);
+    exit(1);
+}
+
+/* 在执行查询语句的时候回调函数的类型 */
+typedef int (*sqlite3_callback)(void*,int,char**, char**);
+例3:
+char *query_sql = "select * from userTable";
+ret = sqlite3_exec(db, query_sql, callback, NULL, &err);
+if (ret != SQLITE_OK) {
+    fprintf(stderr, "select error resion:%s\n", err);
+    sqlite3_close(db);
+    exit(1);
+}
+
+/*
+    col表示表的列数
+    col_name和col_value指向的都是字符串数组
+    col_name--->----"id"------
+                ----"name"----
+                ----"passwd"--
+    col_value-->----"1"-------
+                ----"zhangsan"
+                ----"112233"--
+*/
+int callback(void *data, int col, char**col_value, char**col_name)
+{
+    static int flag = 0;
+    int i = 0;
+
+    if (flag == 0) {
+        for (i = 0; i < col; i++) {
+            printf("%s\t", col_name[i]);
+        }
+        printf("\n");
+        flag = 1;
+    }
+
+    for (i = 0; i < col; i++) {
+        printf("%s\t", col_value[i]);
+    }
+    printf("\n");
+
+    return 0;
+}
+
+/**
+ *  执行查询语句，这个查询数据方法不使用回调函数
+ *
+ *  @param sqlite3 数据库连接
+ *  @param resultp 查询到的纪录
+ *  @param sql     查询语句
+ *  @param nrow    纪录的条数
+ *  @param ncolumn 表的列数
+ *  @param errmsg  出错信息
+ *
+ *  @return 如果成功返回SQLITE_OK
+ */
+int sqlite3_get_table(sqlite3*, const char *sql, char ***resultp, int *nrow, int *ncolumn, char **errmsg);
+
+/**
+ *  释放sqlite3_get_table函数申请的内存（用于存放查询结果的内存）
+ *
+ *  @param result 查询结果的指针
+ */
+void sqlite3_free_table(char **result);
+
+例4:
+/*
+result指向一个字符串数组
+result--->---id------- 
+          ---name----- 
+          ---passwd--- 
+          ---1--------
+          ---zhangsan- 
+          ---112233--- 
+          ---2-------- 
+          ---lisi-----
+          ---112233---
+*/
+char *query_sql = "select * from userTable";
+char **result;
+int col, row;
+ret = sqlite3_get_table(db, query_sql, &result, &row, &col, &err);
+if (ret != SQLITE_OK) {
+    fprintf(stderr, "get_table error resion:%s\n", err);
+    sqlite3_close(db);
+    exit(1);
+}
+
+int i;
+for (i = 0; i < col; i++) {
+    printf("%s\t", result[i]);
+}
+printf("\n");
+for (i = col; i < col * row + col; i++) {
+    if (i % col == 0) {
+        printf("\n");
+    }
+    printf("%s\t", result[i]);
+}
+printf("\n");
+sqlite3_free_table(result);
+
+/**
+ *  把sql语句解析到ppStmt中
+ *
+ *  @param db     数据库连接
+ *  @param zSql   sql语句
+ *  @param nByte  sql语句的长度
+ *  @param ppStmt ppStmt
+ *  @param pzTail NULL
+ *
+ *  @return 如果成功返回SQLITE_OK
+ */
+int sqlite3_prepare_v2(sqlite3 *db, const char *zSql, int nByte, sqlite3_stmt **ppStmt, const char **pzTail)
+
+例5:
+sqlite3_stmt *stmt;
+ret = sqlite3_prepare_v2(db, sql, -1, &stmt, NULL);
+if (ret != SQLITE_OK) {
+    fprintf(stderr, "perpare error\n");
+    sqlite3_close(db);
+    exit(1);
+} else {
+    ret = sqlite3_step(stmt);
+    if (ret != SQLITE_DONE) {
+        fprintf(stderr, "step error\n");
+        sqlite3_close(db);
+        exit(1);
+    }
+}
+
+/**
+ *  绑定数据到stmt
+ *
+ *  @param sqlite3_stmt stmt
+ *  @param int          ?的编号（从1开始）
+ *  @param void         数据
+ *  @param n            数据的长度
+ *
+ *  @return 如果成功返回SQLITE_OK
+ */
+int sqlite3_bind_blob(sqlite3_stmt*, int, const void*, int n, void(*)(void*));
+int sqlite3_bind_double(sqlite3_stmt*, int, double);
+int sqlite3_bind_int(sqlite3_stmt*, int, int);
+int sqlite3_bind_int64(sqlite3_stmt*, int, sqlite_int64);
+int sqlite3_bind_null(sqlite3_stmt*, int);
+int sqlite3_bind_text(sqlite3_stmt*, int, const char*, int n, void(*)(void*));
+
+例6:
+char *insert_sql = "insert into passwdTable(id, passwd) values(?, ?)";
+ret = sqlite3_prepare_v2(db, insert_sql, -1, &stmt, NULL);
+if (ret != SQLITE_OK) {
+    fprintf(stderr, "prepare error\n");
+    sqlite3_close(db);
+    exit(1);
+} else {
+    //给第一个?绑定整型数据
+    sqlite3_bind_int(stmt, 1, 0);
+    //给第二个?绑定字符串数据
+    sqlite3_bind_text(stmt, 2, "'123456'", -1, NULL);
+    ret = sqlite3_step(stmt);
+    if (ret != SQLITE_DONE) {
+        fprintf(stderr, "step error\n");
+        sqlite3_close(db);
+        exit(1);
+    }
+}
+
+/**
+ *  执行stmt中的操作
+ *
+ *  @param sqlite3_stmt stmt
+ *
+ *  @return 如果成功返回SQLITE_DONE
+ *  @return 如果执行的是查询语句，如果查询到了表结尾则返回SQLITE_DONE，如果查询到了记录则返回SQLITE_ROW
+ */
+int sqlite3_step(sqlite3_stmt *stmt);
+
+/**
+ *  获取查询到数据
+ *
+ *  @param sqlite3_stmt stmt
+ *  @param iCol         表中列的编号
+ */
+const void *sqlite3_column_blob(sqlite3_stmt*, int iCol);
+int sqlite3_column_bytes(sqlite3_stmt*, int iCol);
+int sqlite3_column_bytes16(sqlite3_stmt*, int iCol);
+double sqlite3_column_double(sqlite3_stmt*, int iCol);
+int sqlite3_column_int(sqlite3_stmt*, int iCol);
+sqlite_int64 sqlite3_column_int64(sqlite3_stmt*, int iCol);
+const unsigned char *sqlite3_column_text(sqlite3_stmt*, int iCol);
+
+/**
+ *  释放pStmt占用的空间
+ *
+ *  @param pStmt pStmt
+ *
+ *  @return 如果成功返回SQLITE_OK
+ */
+int sqlite3_finalize(sqlite3_stmt *pStmt);
+例7:
+char *query_sql = "select * from passwdTable where id=?";
+ret = sqlite3_prepare_v2(db, query_sql, -1, &stmt, NULL);
+int id;
+const unsigned char *passwd;
+if (ret != SQLITE_OK) {
+    fprintf(stderr, "prepare error\n");
+    sqlite3_close(db);
+    exit(1);
+} else {
+    sqlite3_bind_int(stmt, 1, 0);
+    while (1) {
+        //sqlite3_step运行一次查询到一条数据
+        ret = sqlite3_step(stmt);
+        if (ret != SQLITE_DONE && ret != SQLITE_ROW) {
+            fprintf(stderr, "step error\n");
+            continue;
+        } else if (ret == SQLITE_DONE) {
+            break;
+        } else if (ret == SQLITE_ROW) {
+            id = sqlite3_column_int(stmt, 0);
+            passwd = sqlite3_column_text(stmt, 1);
+            printf("%d\t%s\n", id, passwd);
+        }
+    }
+}
+sqlite3_finalize(stmt);
+
+
